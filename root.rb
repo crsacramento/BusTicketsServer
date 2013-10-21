@@ -4,40 +4,85 @@ require 'data_mapper'
 require 'date'
 require 'json'
 
+# Setup database.
 DataMapper.setup(:default, ENV['DATABASE_URL'] || "sqlite3://#{Dir.pwd}/dev.db")
 
+# Creates User class and database representation.
 class User
-include DataMapper::Resource
-    property :id, Serial
-    property :name, String, :required => true
-    property :password, String, :required => true
-    property :login, String, :key => true
-    
-    property :credit_card_num, Integer, :key => true
-    property :credit_card_type, String
-    property :credit_card_val, DateTime
 
-    has n, :tickets
+  include DataMapper::Resource
+
+  property :id,                     Serial
+
+  property :name,                   String, {
+    required: true,
+    length: 5..50
+  }
+
+  property :password,               String, {
+    required: true,
+    length: 5..50
+  }
+
+  property :login,                  String, {
+    key: true,
+    unique: true,
+    required: true,
+    length: 5..50
+  }
+
+  property :credit_card_num,        String, {
+    required: true,
+    length: 8,
+    unique: true
+  }
+
+  property :credit_card_type,       String, {
+    required: true,
+    format: /(^Visa$)|(^MasterCard$)/
+  }
+
+  property :credit_card_val,        Date, {
+    required: true
+  }
+
+  has n, :tickets
+
 end
 
+# Creates Ticket class and database representation.
 class Ticket
-include DataMapper::Resource
-    property :id, Serial
-    property :bus_mac_address, String
-    property :validated_at, DateTime
-    property :validity_time, Integer, :required => true
 
-    belongs_to :user
+  include DataMapper::Resource
+
+  property :id, Serial
+
+  property :bus_mac_address,        String, {
+    required: true,
+    format: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/
+  }
+
+  property :validated_at,           DateTime
+
+  property :validity_time,          Integer, {
+    :required => true
+  }
+
+  belongs_to :user
+
 end
 
+# Update database scheme if needed.
 DataMapper.finalize.auto_upgrade!
 
+# Disable access protection.
 disable :protection
 
 # methods START
 # :_login/:_password/:_name/:_num/:_type/:_val
 post '/register' do
-    params = JSON.parse request.body.read
+    params = JSON.parse(request.body.read, {symbolize_names: true})
+    puts params
     user = User.new
     user.attributes = {
         :name => params[:name],
@@ -57,22 +102,19 @@ post '/register' do
     end
 end
 
-get '/user/:_login' do
+get '/user/:login' do |login|
 # test method, displays user info
-    user = User.first(:login => :_login)
-    user.to_json
-=begin
-{"user":
+    user = User.first(:login => login)
+{user:
         {
-        "name": user.name,
-        "password": user.password,
-        "login": user.login,
-        "num": user.credit_card_num,
-        "type": user.credit_card_type,
-        "val": user.credit_card_val
+        name: user.name,
+        password: user.password,
+        login: user.login,
+        num: user.credit_card_num,
+        type: user.credit_card_type,
+        val: user.credit_card_val
          }
     }.to_json
-=end
 end
 
 post '/buy' do
