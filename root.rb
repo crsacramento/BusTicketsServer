@@ -32,9 +32,12 @@ end
 
 DataMapper.finalize.auto_upgrade!
 
+disable :protection
+
 # methods START
 # :_login/:_password/:_name/:_num/:_type/:_val
 post '/register' do
+    params = JSON.parse request.body.read
     user = User.new
     user.attributes = {
         :name => params[:name],
@@ -47,16 +50,30 @@ post '/register' do
     }
     if user.save
         # answer success
-        {1 => 'Register successful'}.to_json
+        {"error" => false}.to_json
     else
         # answer error
-        {0 => 'Register failed'}.to_json
+        {"error" => true}.to_json
     end
 end
 
-# get '/user/:_login' do
-#    test method, displays user info
-# end
+get '/user/:_login' do
+# test method, displays user info
+    user = User.first(:login => :_login)
+    user.to_json
+=begin
+{"user":
+        {
+        "name": user.name,
+        "password": user.password,
+        "login": user.login,
+        "num": user.credit_card_num,
+        "type": user.credit_card_type,
+        "val": user.credit_card_val
+         }
+    }.to_json
+=end
+end
 
 post '/buy' do
     # params = login, num_tickets15m, num_tickets30m, num_tickets60m
