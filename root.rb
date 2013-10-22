@@ -13,65 +13,48 @@ DataMapper.setup(:default, ENV['DATABASE_URL'] || "sqlite3://#{Dir.pwd}/dev.db")
 
 # Creates User class and database representation.
 class User
-
   include DataMapper::Resource
-
   property :id,                     Serial
-
   property :name,                   String, {
     required: true,
     length: 5..50
   }
-
   property :password,               String, {
     required: true,
     length: 5..50
   }
-
   property :login,                  String, {
     unique: true,
     required: true,
     length: 5..50
   }
-
   property :credit_card_num,        String, {
     required: true,
     length: 8,
-    unique: true
+    format: /^\d{8}$/
   }
-
   property :credit_card_type,       String, {
     required: true,
     format: /(^Visa$)|(^MasterCard$)/
   }
-
   property :credit_card_val,        Date, {
     required: true
   }
-
   has n, :tickets
-
 end
 
 # Creates Ticket class and database representation.
 class Ticket
-
   include DataMapper::Resource
-
   property :id, Serial
-
   property :bus_mac_address,        String, {
     format: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/
   }
-
   property :validated_at,           DateTime
-
   property :validity_time,          Integer, {
     :required => true
   }
-
   belongs_to :user
-
 end
 
 # Update database scheme if needed.
@@ -80,106 +63,45 @@ DataMapper.finalize.auto_upgrade!
 # Disable access protection.
 disable :protection
 
-# methods START
-post '/register' do
-    # {"name":"Diogo Teixeira","password":"password","login":"diogo","num":"12345678","type":"Visa","val":"1382310000"}
+# Parse parameters list before every action.
+before do
+  request.body.rewind
+  @p = JSON.parse(request.body.read, {symbolize_names: true}) rescue @p = {}
+end
 
-    params = JSON.parse(request.body.read, {symbolize_names: true})
-    puts params
-    user = User.new
-    user.attributes = {
-        :name => params[:name],
-        :password => params[:password],
-        :login => params[:login],
-        :credit_card_num => params[:num],
-        :credit_card_type => params[:type],
-        :credit_card_val => Time.at(params[:val]).utc.to_datetime
-        # _val comes in EpochTime format
-    }
-    if user.save
-        # answer success
-        {"error" => false}.to_json
-    else
-        # answer error
-        # {"error" => true}.to_json
-        user.errors.each do |error|
-            puts error
-        end
-        user.errors.to_json
-    end
+post '/register' do
+  @p[:credit_card_val] = Time.at(@p[:credit_card_val]).utc.to_date rescue nil
+  user = User.new @p rescue user = User.new
+  return {success: true}.to_json if user.save
+  return {success: false, errors: user.errors.to_h}.to_json
 end
 
 get '/tickets/:login' do |login|
-# test method, lists non-validated tickets
-    user = User.first(:login => login)
-    user.tickets.all(:validated_at => nil).to_json
+  user = User.first(:login => login)
+  return { success: true, tickets: user.tickets.all(:validated_at => nil) }.to_json if user
+  return { success: false }.to_json
 end
 
-post '/buy' do
-    # {login":"diogo","num_tickets15m":1,"num_tickets30m":1,"num_tickets60m":0}"
-    params = JSON.parse(request.body.read, {symbolize_names: true})
-   
-    # find client
-    user = User.first(:login => params[:login])
-
-    if !user
-        return {'error' => 'User nonexistent'}.to_json
-    end
-    
-    if((params[:num_tickets15m].to_i + params[:num_tickets30m].to_i + params[:num_tickets60m].to_i) == 0)
-        return {'error' => 'Bought 0 tickets.'}.to_json
-    end
-
-    $i = 0
-    while $i < params[:num_tickets15m].to_i do
-        # new ticket of type 15 mins
-        ticket = user.tickets.new(:validity_time => 15)
-        bool = ticket.save
-        if !bool
-            return ticket.errors.to_json
-        end
-        $i = $i + 1
-    end
-
-    $i = 0
-    
-    while $i < params[:num_tickets30m].to_i do
-        # new ticket of type 30 mins
-        ticket = user.tickets.new(:validity_time => 30)
-        bool = ticket.save
-        if !bool
-           return ticket.errors.to_json
-        end
-        $i = $i + 1
-    end
-    
-    $i = 0
-    
-    while $i < params[:num_tickets60m].to_i do
-        # new ticket of type 60 mins
-        ticket = user.tickets.new(:validity_time => 60)
-        bool = ticket.save
-        if !bool
-            ticket.errors.to_json
-        end
-        $i = $i + 1
-    end
-
-    # check if user qualifies for extra ticket
-    if((params[:num_tickets15m].to_i + params[:num_tickets30m].to_i + params[:num_tickets60m].to_i) >= 10)
-        if params[:num_tickets15m].to_i > 0
-            # free 15m ticket
-            user.tickets.create(:validity_time => 15)
-        elsif params[:num_tickets30m].to_i > 0
-            # free 30m ticket
-            user.tickets.create(:validity_time => 30)
-        elsif params[:num_tickets60m].to_i > 0
-            # free 60m ticket
-            user.tickets.create(:validity_time => 60)
-        end
-    end
-
-    user.tickets.all(:validated_at => nil).to_json
+post '/tickets/:login/buy' do |login|
+  # Parameter checks.
+  user = User.first(:login => login)
+  return { success: false, error: 'User nonexistent' }.to_json unless user
+  @p = @p.select { |k, v| not ([k] & [:ticket_15, :ticket_30, :ticket_60]).empty? }
+  unless
+    @p.keys.count == 3 &&
+    @p.values.all? { |x| x.class == Fixnum } &&
+    @p.values.inject(:+) > 0
+    return { success: false, error: 'Bought 0 tickets.' }.to_json
+  end
+  # Create tickets.
+  tickets = []
+  @p.keys.each do |t|
+    @p[t].times { tickets << user.tickets.new(validity_time: t.to_s[/\d+$/].to_i) }
+  end
+  tickets << user.tickets.new({ validity_time: (tickets.map { |ts| ts.validity_time }).min }) if tickets.count >= 10
+  return { success: false, error: 'Error buying tickets.' } unless tickets.all? { |ts| ts.valid? }
+  tickets.each { |ts| ts.save }
+  {success: true, tickets: user.tickets.all(:validated_at => nil), extra: @p.values.inject(:+) < tickets.count }.to_json
 end
 
 post '/validate' do
