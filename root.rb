@@ -48,7 +48,8 @@ class Ticket
   include DataMapper::Resource
   property :id, Serial
   property :bus_mac_address,        String, {
-    format: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/
+    format: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/,
+    length: 17
   }
   property :validated_at,           DateTime
   property :validity_time,          Integer, {
@@ -82,11 +83,12 @@ get '/tickets/:login' do |login|
   return { success: false }.to_json
 end
 
+# {"ticket_15":0,"ticket_30":0,"ticket_60":0}
 post '/tickets/:login/buy' do |login|
   # Parameter checks.
   user = User.first(:login => login)
   return { success: false, error: 'User nonexistent' }.to_json unless user
-  @p = @p.select { |k, v| not ([k] & [:ticket_15, :ticket_30, :ticket_60]).empty? }
+  @p = @p.select { |k, v| !([k] & [:ticket_15, :ticket_30, :ticket_60]).empty? }
   unless
     @p.keys.count == 3 &&
     @p.values.all? { |x| x.class == Fixnum } &&
@@ -104,31 +106,17 @@ post '/tickets/:login/buy' do |login|
   {success: true, tickets: user.tickets.all(:validated_at => nil), extra: @p.values.inject(:+) < tickets.count }.to_json
 end
 
-post '/validate' do
-    # {"bus":"00:00:00:00:00:00","ticket":1}
-    params = JSON.parse(request.body.read, {symbolize_names: true})
-
-    ticket = Ticket.get(params[:ticket].to_i)
-    if ticket.validated_at == nil and ticket.bus_mac_address == nil
-        ticket.bus_mac_address = params[:bus_mac_address]
-        ticket.validated_at = Time.now
-        bool = ticket.save
-        if !bool
-            return ticket.errors.to_json
-        end
-    
-        ticket = Ticket.get(params[:ticket].to_i)
-        return ticket.to_json
-    else
-        return ticket.errors.to_json
-    end
+# {"bus":"00:00:00:00:00:00"}
+post '/tickets/:login/validate/:id' do |login, id|
+  ticket = User.first(login: login).tickets.get(id) rescue nil
+  if !ticket || ticket.validated_at || ticket.bus_mac_address || !((@p[:bus] || '').upcase =~ /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/)
+     return { success: false, error: 'Failed to validate.' }.to_json
+  end
+  return { success: true, ticket: ticket }.to_json if ticket.update({ bus_mac_address: @p[:bus].upcase, validated_at: Time.now })
+  return { success: false, error: 'Failed to validate.' }.to_json
 end
 
-post '/buslist' do
-    #{"bus":"00:00:00:00:00:00"}
-    params = JSON.parse(request.body.read, {symbolize_names: true})
-    tickets = Ticket.all(:bus_mac_address => params[:bus]) & Ticket.all(:validated_at.lte => (Time.now - 90*60).to_s)
-    tickets.to_json
+get '/tickets/list/:bus' do |bus|
+  tickets = Ticket.all(:bus_mac_address => bus, :validated_at.gte => Time.now - 90 * 60) rescue nil
+  { success: true, tickets: tickets }.to_json
 end
-
-# methods END
