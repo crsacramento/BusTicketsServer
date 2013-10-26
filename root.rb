@@ -68,12 +68,13 @@ disable :protection
 before do
   request.body.rewind
   @p = JSON.parse(request.body.read, {symbolize_names: true}) rescue @p = {}
+  @prices = { ticket_15: 2, ticket_30: 3, ticket_60: 5 }
 end
 
 post '/register' do
   @p[:credit_card_val] = Time.at(@p[:credit_card_val]).utc.to_date rescue nil
   user = User.new @p rescue user = User.new
-  return {success: true}.to_json if user.save
+  return {success: true, user: user }.to_json if user.save
   return {success: false, errors: user.errors.to_h}.to_json
 end
 
@@ -84,17 +85,34 @@ get '/tickets/:login' do |login|
 end
 
 # {"ticket_15":0,"ticket_30":0,"ticket_60":0}
+post '/tickets/:login/price' do |login|
+  # Parameter checks.
+  user = User.first(:login => login)
+  return { success: false, error: 'User nonexistent' }.to_json unless user
+  @p = @p.select { |k, v| !([k] & [:ticket_15, :ticket_30, :ticket_60]).empty? }
+  return { success: false, error: 'Bad request' }.to_json unless @p.keys.count == 3 && @p.values.all? { |x| x.class == Fixnum }
+  return { success: false, error: 'You must buy at least one ticket.' }.to_json unless @p.values.inject(:+) > 0
+  return { success: false, error: "You can't have more than 10 tickets of each type." }.to_json unless
+    @p.keys.all? { |k| @p[k] == 0 || (user.tickets.all(:validity_time => k.to_s[/\d+$/].to_i).count + @p[k]) <= 10 }
+  res = { success: true, price: 0 }.merge @p
+  @p.each { |k, v| res[:price] += v * @prices[k] }
+  [:ticket_15, :ticket_30, :ticket_60].each do |t|
+    (res[t] += 1; break;) if res[t] > 0
+  end if @p.values.inject(:+) >= 10
+  return res.to_json
+end
+
+# {"ticket_15":0,"ticket_30":0,"ticket_60":0}
 post '/tickets/:login/buy' do |login|
   # Parameter checks.
   user = User.first(:login => login)
   return { success: false, error: 'User nonexistent' }.to_json unless user
   @p = @p.select { |k, v| !([k] & [:ticket_15, :ticket_30, :ticket_60]).empty? }
-  unless
-    @p.keys.count == 3 &&
-    @p.values.all? { |x| x.class == Fixnum } &&
-    @p.values.inject(:+) > 0
-    return { success: false, error: 'Bought 0 tickets.' }.to_json
-  end
+  return { success: false, error: 'Bad request' }.to_json unless @p.keys.count == 3 && @p.values.all? { |x| x.class == Fixnum }
+  return { success: false, error: 'You must buy at least one ticket.' }.to_json unless @p.values.inject(:+) > 0
+  return { success: false, error: "You can't have more than 10 tickets of each type." }.to_json unless
+    @p.keys.all? { |k| @p[k] == 0 || (user.tickets.all(:validity_time => k.to_s[/\d+$/].to_i).count + @p[k]) <= 10 }
+
   # Create tickets.
   tickets = []
   @p.keys.each do |t|
@@ -116,7 +134,7 @@ post '/tickets/:login/validate/:id' do |login, id|
   return { success: false, error: 'Failed to validate.' }.to_json
 end
 
-get '/tickets/list/:bus' do |bus|
-  tickets = Ticket.all(:bus_mac_address => bus, :validated_at.gte => Time.now - 90 * 60) rescue nil
+post '/tickets/list' do
+  tickets = Ticket.all(:bus_mac_address => @p[:bus].upcase, :validated_at.gte => Time.now - 90 * 60) rescue nil
   { success: true, tickets: tickets }.to_json
 end
