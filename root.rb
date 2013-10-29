@@ -78,6 +78,12 @@ post '/register' do
   return {success: false, errors: user.errors.to_h}.to_json
 end
 
+post '/login' do
+  user = User.first(:login => @p[:login], :password => @p[:password]) rescue user = nil
+  return { success: true, user: user }.to_json if user
+  return { success: false }.to_json
+end
+
 get '/tickets/:login' do |login|
   user = User.first(:login => login)
   return { success: true, tickets: user.tickets.all(:validated_at => nil) }.to_json if user
